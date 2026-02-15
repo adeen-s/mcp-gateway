@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+audit/*.jsonl
+
+# coverage
+coverage/
+
+# editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
