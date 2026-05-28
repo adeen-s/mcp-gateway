@@ -1,0 +1,28 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"   # MCP endpoint
+      - "9090:9090"   # admin + metrics
+    environment:
+      MCP_GATEWAY_CONFIG: /app/config/gateway.yaml
+      REDIS_URL: redis://redis:6379
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      ACME_API_KEY: ${ACME_API_KEY:-dev-acme-key-123}
+    volumes:
+      # The bundled config spawns the example upstream over stdio inside the
+      # gateway container; swap in your own gateway.yaml here.
+      - ./config/example.yaml:/app/config/gateway.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

@@ -1,0 +1,108 @@
+# mcp-gateway example configuration.
+# ${VAR} and ${VAR:-default} are interpolated from the environment at load time.
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  path: /mcp
+  # tls:
+  #   certFile: certs/server.crt
+  #   keyFile: certs/server.key
+  #   caFile: certs/ca.crt          # enables client-cert verification (mTLS)
+  #   requestClientCert: true
+
+admin:
+  enabled: true
+  host: 127.0.0.1
+  port: 9090
+  token: ${ADMIN_TOKEN:-}
+
+namespace:
+  separator: "__"        # tools exposed as <upstream>__<tool>
+  onCollision: error     # or "first" (first upstream in config order wins)
+
+upstreams:
+  - name: echo
+    transport:
+      type: stdio
+      command: node
+      args: [examples/upstream-echo/server.mjs]
+      env:
+        ECHO_SERVER_NAME: echo
+    timeoutMs: 15000
+    healthCheckIntervalMs: 15000
+    retry:
+      maxAttempts: 3
+      baseDelayMs: 200
+      maxDelayMs: 5000
+      jitter: true
+    circuitBreaker:
+      enabled: true
+      failureThreshold: 5
+      successThreshold: 2
+      openDurationMs: 30000
+      halfOpenMaxConcurrent: 1
+
+  # - name: github
+  #   transport:
+  #     type: http
+  #     url: https://mcp.example.com/github
+  #     headers:
+  #       authorization: Bearer ${GITHUB_MCP_TOKEN}
+
+auth:
+  providers:
+    - type: apiKey
+      header: x-api-key
+      keys:
+        - key: ${ACME_API_KEY:-dev-acme-key-123}
+          tenant: acme
+  # - type: jwt
+  #   jwksUri: ${JWKS_URI}
+  #   issuer: https://auth.example.com/
+  #   audience: mcp-gateway
+  #   tenantClaim: tenant
+  # - type: mtls
+  #   certs:
+  #     - subjectCN: acme.client
+  #       tenant: acme
+  # anonymousTenant: dev        # dev only: unauthenticated -> tenant "dev"
+
+tenants:
+  - id: acme
+    displayName: Acme Corp
+    rbac:
+      allowTools: ["echo__*"]
+      denyTools: ["echo__fail"]
+      denyResources: []
+    rateLimit:
+      requests: { ratePerSec: 10, burst: 20 }
+      perTool:
+        echo__add: { ratePerSec: 2, burst: 5 }
+      dailyQuota: 10000
+
+rateLimit:
+  backend: memory          # or "redis"
+
+cache:
+  enabled: true
+  backend: memory          # or "redis"
+  ttlSeconds: 60
+  tools: ["echo__add"]     # only idempotent tools, by glob
+
+redis:
+  url: ${REDIS_URL:-redis://localhost:6379}
+  keyPrefix: "mcpgw:"
+
+observability:
+  logLevel: info
+  metrics:
+    enabled: true
+    path: /metrics
+  tracing:
+    enabled: false
+    serviceName: mcp-gateway
+    # otlpEndpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+  audit:
+    enabled: true
+    sink: stdout           # or "file" (+ path)
