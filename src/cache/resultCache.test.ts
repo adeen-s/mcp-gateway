@@ -1,26 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { cacheSchema } from '../config/schema.js';
-import type { Logger } from '../observability/logger.js';
+import { silentLogger } from '../observability/logger.js';
 import { MemoryCacheStore } from './memory.js';
 import { buildCacheKey, canonicalJson, ResultCache } from './resultCache.js';
-
-const silentLogger = {
-  trace() {},
-  debug() {},
-  info() {},
-  warn() {},
-  error() {},
-  fatal() {},
-  child() {
-    return this;
-  },
-} as unknown as Logger;
 
 const okResult = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 
 function makeCache(config: Record<string, unknown>, now?: () => number) {
   const store = new MemoryCacheStore(100, now);
-  const cache = new ResultCache(store, cacheSchema.parse(config), silentLogger);
+  const cache = new ResultCache(store, cacheSchema.parse(config), silentLogger());
   return { store, cache };
 }
 

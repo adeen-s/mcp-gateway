@@ -1,3 +1,8 @@
+import { createRequire } from 'node:module';
+
+/** Package version, reported to clients and upstreams in the MCP handshake. */
+export const VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
+
 /** How a request was authenticated. */
 export type AuthMethod = 'apiKey' | 'jwt' | 'mtls' | 'anonymous';
 

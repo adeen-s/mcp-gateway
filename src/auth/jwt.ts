@@ -33,6 +33,7 @@ export class JwtAuthProvider implements AuthProvider {
 
     let payload: JWTPayload;
     try {
+      // Two branches only to pick jwtVerify's key-vs-JWKS overload.
       const verified =
         this.key instanceof Uint8Array
           ? await jwtVerify(token, this.key, this.verifyOptions())

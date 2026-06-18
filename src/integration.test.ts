@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { upstreamSchema, namespaceSchema } from './config/schema.js';
-import type { Logger } from './observability/logger.js';
+import { silentLogger } from './observability/logger.js';
 import { Router } from './routing/router.js';
 import { UpstreamConnection } from './routing/upstream.js';
 
@@ -8,18 +8,6 @@ import { UpstreamConnection } from './routing/upstream.js';
  * End-to-end wiring test: two real MCP upstreams (the bundled echo example)
  * spawned over stdio, aggregated by the Router with namespaced routing.
  */
-
-const silentLogger = {
-  trace() {},
-  debug() {},
-  info() {},
-  warn() {},
-  error() {},
-  fatal() {},
-  child() {
-    return this;
-  },
-} as unknown as Logger;
 
 function makeUpstream(name: string): UpstreamConnection {
   return new UpstreamConnection(
@@ -33,14 +21,14 @@ function makeUpstream(name: string): UpstreamConnection {
       },
       timeoutMs: 10_000,
     }),
-    silentLogger
+    silentLogger()
   );
 }
 
 describe('gateway <-> upstream integration (stdio)', () => {
   const alpha = makeUpstream('alpha');
   const beta = makeUpstream('beta');
-  const router = new Router([alpha, beta], namespaceSchema.parse({}), silentLogger);
+  const router = new Router([alpha, beta], namespaceSchema.parse({}), silentLogger());
 
   beforeAll(async () => {
     await Promise.all([alpha.connect(), beta.connect()]);

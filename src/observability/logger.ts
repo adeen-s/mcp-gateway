@@ -4,8 +4,6 @@ export type { Logger };
 
 export interface LoggerOptions {
   level?: string;
-  /** Pretty-print for local development. */
-  pretty?: boolean;
 }
 
 export function createLogger(opts: LoggerOptions = {}): Logger {

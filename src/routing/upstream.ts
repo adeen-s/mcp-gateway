@@ -7,13 +7,12 @@ import type {
   CallToolResult,
   ReadResourceResult,
   Resource,
-  ResourceTemplate,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { UpstreamConfig } from '../config/schema.js';
 import { CircuitBreaker, CircuitOpenError, type CircuitState } from '../resilience/circuitBreaker.js';
 import { withRetry, withTimeout, TimeoutError } from '../resilience/retry.js';
-import { GatewayError } from '../types.js';
+import { GatewayError, VERSION } from '../types.js';
 import type { Logger } from '../observability/logger.js';
 
 export interface UpstreamStatus {
@@ -116,7 +115,7 @@ export class UpstreamConnection {
   private async doConnect(): Promise<void> {
     const transport = this.buildTransport();
     const client = new Client(
-      { name: 'mcp-gateway', version: '0.1.0' },
+      { name: 'mcp-gateway', version: VERSION },
       { capabilities: {} }
     );
     transport.onclose = () => {
@@ -203,13 +202,6 @@ export class UpstreamConnection {
   async listResources(): Promise<Resource[]> {
     const res = await this.guardedIdempotent('resources/list', (c) => c.listResources());
     return res.resources;
-  }
-
-  async listResourceTemplates(): Promise<ResourceTemplate[]> {
-    const res = await this.guardedIdempotent('resources/templates/list', (c) =>
-      c.listResourceTemplates()
-    );
-    return res.resourceTemplates;
   }
 
   async callTool(name: string, args: Record<string, unknown> | undefined): Promise<CallToolResult> {

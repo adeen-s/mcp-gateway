@@ -29,10 +29,6 @@ export class AuthChain {
     return new AuthChain(providers, config.anonymousTenant);
   }
 
-  get providerNames(): string[] {
-    return this.providers.map((p) => p.name);
-  }
-
   async authenticate(ctx: AuthRequestContext): Promise<TenantIdentity> {
     for (const provider of this.providers) {
       const identity = await provider.authenticate(ctx);

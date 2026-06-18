@@ -36,10 +36,6 @@ export class Router {
     return [...this.upstreams.keys()];
   }
 
-  getUpstream(name: string): UpstreamConnection | undefined {
-    return this.upstreams.get(name);
-  }
-
   allUpstreams(): UpstreamConnection[] {
     return [...this.upstreams.values()];
   }
