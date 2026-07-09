@@ -39,17 +39,23 @@ function authorized(ctx: AdminContext, req: http.IncomingMessage): boolean {
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
+class BadRequest extends Error {}
+
 async function readBody(req: http.IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > 64 * 1024) throw new BadRequest('request body too large');
     chunks.push(chunk as Buffer);
-    if (Buffer.concat(chunks).length > 64 * 1024) {
-      throw new Error('request body too large');
-    }
   }
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text) return {};
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new BadRequest('request body is not valid JSON');
+  }
 }
 
 /**
@@ -66,10 +72,13 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
 export function createAdminServer(ctx: AdminContext): http.Server {
   return http.createServer((req, res) => {
     handle(ctx, req, res).catch((err: unknown) => {
-      ctx.logger.error({ err: (err as Error).message }, 'admin api error');
-      if (!res.headersSent) {
-        send(res, 500, { error: 'internal error' });
+      if (res.headersSent) return;
+      if (err instanceof BadRequest) {
+        send(res, 400, { error: err.message });
+        return;
       }
+      ctx.logger.error({ err: (err as Error).message }, 'admin api error');
+      send(res, 500, { error: 'internal error' });
     });
   });
 }
