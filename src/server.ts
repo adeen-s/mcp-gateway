@@ -23,9 +23,9 @@ import { RedisCacheStore } from './cache/redis.js';
 import { ResultCache } from './cache/resultCache.js';
 import type { CacheStore } from './cache/store.js';
 import { loadConfig } from './config/loader.js';
-import type { GatewayConfig } from './config/schema.js';
+import type { GatewayConfig, UpstreamConfig } from './config/schema.js';
 import { AuditLogger, type AuditSink } from './observability/audit.js';
-import { createLogger, silentLogger, type Logger } from './observability/logger.js';
+import { createLogger, type Logger } from './observability/logger.js';
 import { Metrics } from './observability/metrics.js';
 import { getTracer } from './observability/tracing.js';
 import { MemoryRateLimitStore } from './ratelimit/memory.js';
@@ -37,17 +37,31 @@ import { HealthMonitor } from './resilience/health.js';
 import { Router } from './routing/router.js';
 import { UpstreamConnection } from './routing/upstream.js';
 import { createAdminServer } from './admin/api.js';
-import { GatewayError, type TenantIdentity } from './types.js';
+import { GatewayError, VERSION, type TenantIdentity } from './types.js';
 
 /** JSON-RPC error codes for gateway-level rejections (vendor range). */
 const JSONRPC_FORBIDDEN = -32043;
 const JSONRPC_RATE_LIMITED = -32029;
 
+/**
+ * JSON-RPC error thrown from request handlers. The SDK serializes any error
+ * carrying a numeric `code`; unlike McpError it doesn't bake "MCP error <code>:"
+ * into the message, which the client would otherwise prefix a second time.
+ */
+class RpcError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: unknown
+  ) {
+    super(message);
+  }
+}
+
 interface Session {
   transport: StreamableHTTPServerTransport;
   server: Server;
   tenant: TenantIdentity;
-  openedAt: number;
 }
 
 export interface GatewayOptions {
@@ -71,7 +85,7 @@ export class Gateway {
   private readonly rateLimiter: RateLimitService;
   private readonly cacheStore: CacheStore;
   readonly cache: ResultCache;
-  private router!: Router;
+  private readonly router: Router;
   private readonly healthMonitor: HealthMonitor;
   private httpServer?: http.Server | https.Server;
   private adminServer?: http.Server;
@@ -108,23 +122,19 @@ export class Gateway {
     });
 
     this.healthMonitor = new HealthMonitor(this.logger);
-    this.buildRouter(this.config);
+    this.router = new Router(
+      this.config.upstreams.map((u) => this.newUpstream(u)),
+      this.config.namespace,
+      this.logger
+    );
   }
 
-  private buildRouter(config: GatewayConfig): void {
-    const upstreams = config.upstreams.map(
-      (u) =>
-        new UpstreamConnection(u, this.logger.child({ upstream: u.name }), {
-          onCircuitStateChange: (name, _from, to) => this.metrics.setCircuitState(name, to),
-          onHealthChange: (name, healthy) =>
-            this.metrics.upstreamHealthy.set({ upstream: name }, healthy ? 1 : 0),
-        })
-    );
-    if (this.router) {
-      this.router.replace(upstreams, config.namespace);
-    } else {
-      this.router = new Router(upstreams, config.namespace, this.logger);
-    }
+  private newUpstream(config: UpstreamConfig): UpstreamConnection {
+    return new UpstreamConnection(config, this.logger.child({ upstream: config.name }), {
+      onCircuitStateChange: (name, _from, to) => this.metrics.setCircuitState(name, to),
+      onHealthChange: (name, healthy) =>
+        this.metrics.upstreamHealthy.set({ upstream: name }, healthy ? 1 : 0),
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -249,14 +259,7 @@ export class Gateway {
         keep.push(existing);
         currentByName.delete(upstreamCfg.name);
       } else {
-        keep.push(
-          new UpstreamConnection(upstreamCfg, this.logger.child({ upstream: upstreamCfg.name }), {
-            onCircuitStateChange: (name, _from, to) => this.metrics.setCircuitState(name, to),
-            onHealthChange: (name, healthy) =>
-              this.metrics.upstreamHealthy.set({ upstream: name }, healthy ? 1 : 0),
-          })
-        );
-        if (existing) currentByName.delete(upstreamCfg.name);
+        keep.push(this.newUpstream(upstreamCfg));
       }
     }
     // Anything left in currentByName was either removed or replaced.
@@ -380,7 +383,7 @@ export class Gateway {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sessionId) => {
-        this.sessions.set(sessionId, { transport, server, tenant, openedAt: Date.now() });
+        this.sessions.set(sessionId, { transport, server, tenant });
         this.metrics.activeSessions.set(this.sessions.size);
         this.audit.record({
           event: 'session_open',
@@ -420,7 +423,7 @@ export class Gateway {
 
   private buildSessionServer(tenant: TenantIdentity): Server {
     const server = new Server(
-      { name: 'mcp-gateway', version: '0.1.0' },
+      { name: 'mcp-gateway', version: VERSION },
       {
         capabilities: { tools: {}, resources: {} },
         instructions:
@@ -462,7 +465,7 @@ export class Gateway {
           status: 'denied',
           error: decision.reason,
         });
-        throw new McpError(JSONRPC_FORBIDDEN, `access to resource "${uri}" is denied`);
+        throw new RpcError(JSONRPC_FORBIDDEN, `access to resource "${uri}" is denied`);
       }
       try {
         const result = await this.router.readResource(uri);
@@ -482,7 +485,7 @@ export class Gateway {
           status: 'error',
           error: (err as Error).message,
         });
-        throw this.toMcpError(err);
+        throw this.toRpcError(err);
       }
     });
 
@@ -504,10 +507,16 @@ export class Gateway {
         status: 'denied',
         error: decision.reason,
       });
-      throw new McpError(JSONRPC_FORBIDDEN, `access to tool "${tool}" is denied`);
+      throw new RpcError(JSONRPC_FORBIDDEN, `access to tool "${tool}" is denied`);
     }
 
-    await this.checkRateLimit(tenant, tool);
+    let resolved: ReturnType<Router['resolveTool']>;
+    try {
+      await this.rateLimiter.checkToolCall(tenant.tenantId, tool);
+      resolved = this.router.resolveTool(tool);
+    } catch (err) {
+      throw this.toRpcError(err);
+    }
 
     const cached = await this.cache.get(tool, args);
     if (cached) {
@@ -522,7 +531,6 @@ export class Gateway {
       return cached;
     }
 
-    const resolved = this.router.resolveTool(tool);
     const upstreamName = resolved.upstream.name;
     const tracer = getTracer();
     const startedAt = process.hrtime.bigint();
@@ -575,54 +583,38 @@ export class Gateway {
           error: (err as Error).message,
         });
         span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
-        throw this.toMcpError(err);
+        throw this.toRpcError(err);
       } finally {
         span.end();
       }
     });
   }
 
-  private async checkRateLimit(tenant: TenantIdentity, tool: string): Promise<void> {
-    try {
-      await this.rateLimiter.checkToolCall(tenant.tenantId, tool);
-    } catch (err) {
-      if (err instanceof GatewayError) {
-        throw new McpError(JSONRPC_RATE_LIMITED, err.message, err.details);
-      }
-      throw err;
-    }
-  }
-
-  private toMcpError(err: unknown): McpError {
-    if (err instanceof McpError) return err;
+  private toRpcError(err: unknown): RpcError {
+    if (err instanceof RpcError) return err;
+    // Upstream protocol errors keep their code.
+    if (err instanceof McpError) return new RpcError(err.code, err.message, err.data);
     if (err instanceof GatewayError) {
       switch (err.code) {
         case 'UNKNOWN_TOOL':
         case 'UNKNOWN_RESOURCE':
-          return new McpError(ErrorCode.InvalidParams, err.message, err.details);
+          return new RpcError(ErrorCode.InvalidParams, err.message, err.details);
         case 'FORBIDDEN':
-          return new McpError(JSONRPC_FORBIDDEN, err.message, err.details);
+          return new RpcError(JSONRPC_FORBIDDEN, err.message, err.details);
         case 'RATE_LIMITED':
         case 'QUOTA_EXCEEDED':
-          return new McpError(JSONRPC_RATE_LIMITED, err.message, err.details);
+          return new RpcError(JSONRPC_RATE_LIMITED, err.message, err.details);
         case 'UPSTREAM_TIMEOUT':
-          return new McpError(ErrorCode.RequestTimeout, err.message, err.details);
+          return new RpcError(ErrorCode.RequestTimeout, err.message, err.details);
         default:
-          return new McpError(ErrorCode.InternalError, err.message, err.details);
+          return new RpcError(ErrorCode.InternalError, err.message, err.details);
       }
     }
-    return new McpError(ErrorCode.InternalError, (err as Error).message ?? 'internal error');
+    return new RpcError(ErrorCode.InternalError, (err as Error).message ?? 'internal error');
   }
 
   private writeJson(res: http.ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   }
-
-  /** Test/diagnostic helper. */
-  upstreamStatuses() {
-    return this.router.allUpstreams().map((u) => u.status());
-  }
 }
-
-export { silentLogger };
