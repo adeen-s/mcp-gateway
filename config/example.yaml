@@ -13,7 +13,7 @@ server:
 
 admin:
   enabled: true
-  host: 127.0.0.1
+  host: ${ADMIN_HOST:-127.0.0.1}   # keep on localhost unless it sits behind a firewall
   port: 9090
   token: ${ADMIN_TOKEN:-}
 
@@ -82,11 +82,11 @@ tenants:
       dailyQuota: 10000
 
 rateLimit:
-  backend: memory          # or "redis"
+  backend: ${STATE_BACKEND:-memory}   # memory | redis (redis for multi-replica)
 
 cache:
   enabled: true
-  backend: memory          # or "redis"
+  backend: ${STATE_BACKEND:-memory}   # memory | redis
   ttlSeconds: 60
   tools: ["echo__add"]     # only idempotent tools, by glob
 

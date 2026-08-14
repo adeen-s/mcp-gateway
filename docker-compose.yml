@@ -7,7 +7,9 @@ services:
     environment:
       MCP_GATEWAY_CONFIG: /app/config/gateway.yaml
       REDIS_URL: redis://redis:6379
+      STATE_BACKEND: redis   # rate limits + result cache shared via Redis
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      ADMIN_HOST: 0.0.0.0   # reachable through the published port; token-protected
       ACME_API_KEY: ${ACME_API_KEY:-dev-acme-key-123}
     volumes:
       # The bundled config spawns the example upstream over stdio inside the
