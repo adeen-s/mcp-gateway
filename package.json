@@ -36,7 +36,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "demo": "node examples/demo.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
