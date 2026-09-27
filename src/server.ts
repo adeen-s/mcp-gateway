@@ -518,20 +518,27 @@ export class Gateway {
       throw this.toRpcError(err);
     }
 
+    const upstreamName = resolved.upstream.name;
+    const auditBase = {
+      event: 'tool_call',
+      tenant: tenant.tenantId,
+      authMethod: tenant.method,
+      subject: tenant.subject,
+      tool,
+      upstream: upstreamName,
+    } as const;
+
     const cached = await this.cache.get(tool, args);
     if (cached) {
       this.metrics.toolCalls.inc({ tenant: tenant.tenantId, tool, upstream: 'cache', status: 'ok' });
       this.audit.record({
-        event: 'tool_call',
-        tenant: tenant.tenantId,
-        tool,
+        ...auditBase,
         status: 'ok',
         cached: true,
       });
       return cached;
     }
 
-    const upstreamName = resolved.upstream.name;
     const tracer = getTracer();
     const startedAt = process.hrtime.bigint();
 
@@ -550,12 +557,7 @@ export class Gateway {
         });
         this.metrics.toolCallDuration.observe({ tool, upstream: upstreamName }, durationMs / 1000);
         this.audit.record({
-          event: 'tool_call',
-          tenant: tenant.tenantId,
-          authMethod: tenant.method,
-          subject: tenant.subject,
-          tool,
-          upstream: upstreamName,
+          ...auditBase,
           status: result.isError ? 'error' : 'ok',
           durationMs: Math.round(durationMs),
           cached: false,
@@ -574,10 +576,7 @@ export class Gateway {
           status: 'error',
         });
         this.audit.record({
-          event: 'tool_call',
-          tenant: tenant.tenantId,
-          tool,
-          upstream: upstreamName,
+          ...auditBase,
           status: 'error',
           durationMs: Math.round(durationMs),
           error: (err as Error).message,
