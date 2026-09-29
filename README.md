@@ -6,6 +6,8 @@
 
 **Every AI client in your org is wired straight to every MCP server, each with its own credentials and no shared policy, rate limits or audit trail. `mcp-gateway` puts one authenticated, policy-enforcing, observable endpoint in front of all of them.**
 
+![mcp-gateway demo: one MCP client going through auth, RBAC, caching and rate limits](docs/demo/demo.gif)
+
 ```mermaid
 flowchart LR
     C1[MCP client A] -->|streamable HTTP /mcp| AUTH
@@ -76,7 +78,14 @@ With the gateway running (either way above):
 npm run demo        # GATEWAY_URL / API_KEY env vars override the defaults
 ```
 
-[`examples/demo.mjs`](examples/demo.mjs) is a plain MCP SDK client. This is its real output against the example config:
+[`examples/demo.mjs`](examples/demo.mjs) is a plain MCP SDK client. It gets a 401 without a key, sees only the tools its tenant may call, is denied a blocked tool, has a repeat call answered from the cache, and runs into its per-tool rate limit. That's the recording at the top of this README.
+
+The same run as an operator sees it on the admin port: health, upstream circuit state, Prometheus counters, the audit log, cache invalidation and a hot config reload:
+
+![Admin API, metrics and audit log for the demo run](docs/demo/ops.gif)
+
+<details>
+<summary>Demo output as text</summary>
 
 ```text
 ▸ Unauthenticated request
@@ -105,8 +114,6 @@ npm run demo        # GATEWAY_URL / API_KEY env vars override the defaults
   ...
 ```
 
-The same run as the gateway sees it:
-
 ```text
 $ curl -s localhost:9090/metrics | grep -E '^mcpgw_(tool_calls|cache_hits|ratelimit|rbac)'
 mcpgw_tool_calls_total{tenant="acme",tool="echo__add",upstream="echo",status="ok"} 4
@@ -117,8 +124,12 @@ mcpgw_cache_hits_total{tool="echo__add"} 1
 
 # audit log (stdout), one JSON line per decision (ts trimmed)
 {"event":"tool_call","tenant":"acme","authMethod":"apiKey","subject":"key:7738f99ca121","tool":"echo__add","upstream":"echo","status":"ok","durationMs":1,"cached":false}
-{"event":"tool_call","tenant":"acme","tool":"echo__add","status":"ok","cached":true}
+{"event":"tool_call","tenant":"acme","authMethod":"apiKey","subject":"key:7738f99ca121","tool":"echo__add","upstream":"echo","status":"ok","cached":true}
 ```
+
+</details>
+
+The recordings are scripted with [VHS](https://github.com/charmbracelet/vhs). To regenerate them, run `vhs docs/demo/<name>.tape` from the repo root.
 
 ## Architecture
 
@@ -228,6 +239,8 @@ npm run typecheck   # tsc --strict
 npm run lint        # eslint
 npm run build       # emit dist/
 ```
+
+![npm test: 77 tests across 9 files, including the end-to-end gateway suite](docs/demo/tests.gif)
 
 | Suite | What it covers |
 |---|---|
