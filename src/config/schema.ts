@@ -219,6 +219,11 @@ export const serverSchema = z.object({
   port: z.number().int().min(0).max(65_535).default(8080),
   path: z.string().regex(/^\//).default('/mcp'),
   tls: tlsSchema.optional(),
+  /**
+   * Close sessions that have had no open request for this long, so clients
+   * that disappear without a DELETE don't leak sessions. 0 disables reaping.
+   */
+  sessionIdleTimeoutMs: z.number().int().min(0).default(1_800_000),
 });
 
 export const adminSchema = z.object({

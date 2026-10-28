@@ -148,6 +148,8 @@ Each upstream connection ([`src/routing/upstream.ts`](src/routing/upstream.ts)) 
 
 Errors reach clients as JSON-RPC codes: `-32043` forbidden, `-32029` rate-limited or over quota, `-32602` unknown tool, `-32001` upstream timeout.
 
+Sessions with no open request for `server.sessionIdleTimeoutMs` (default 30 minutes, `0` disables) are closed and audited as `session_expired`, so clients that vanish without a `DELETE` don't leak. A connected client holding its GET notification stream open is never idle.
+
 ### Code layout
 
 ```text
@@ -234,7 +236,7 @@ Set `observability.tracing.enabled: true` and an OTLP endpoint to export an Open
 ## Tests
 
 ```bash
-npm test            # vitest: 77 tests, ~6s, no external services needed
+npm test            # vitest: 81 tests, ~6s, no external services needed
 npm run typecheck   # tsc --strict
 npm run lint        # eslint
 npm run build       # emit dist/
@@ -252,7 +254,6 @@ The protocol layer is never mocked: upstreams are real processes speaking MCP th
 
 ## Roadmap
 
-- [ ] **Session reaping.** Idle sessions from clients that disappear without a `DELETE` are kept until restart. Add an idle TTL.
 - [ ] **Prompts and resource templates.** Only tools and resources are proxied today. Add `prompts/*` and `resources/templates/list`.
 - [ ] **Change notifications.** Forward upstream `list_changed` notifications to connected clients.
 - [ ] **Per-tenant upstream credentials.** Pass through or exchange the caller's token instead of using one shared credential per upstream.

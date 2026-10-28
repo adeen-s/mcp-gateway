@@ -16,6 +16,15 @@ describe('config schema', () => {
     expect(cfg.upstreams[0].retry.maxAttempts).toBe(3);
     expect(cfg.upstreams[0].circuitBreaker.failureThreshold).toBe(5);
     expect(cfg.cache.enabled).toBe(false);
+    expect(cfg.server.sessionIdleTimeoutMs).toBe(1_800_000);
+  });
+
+  it('accepts 0 to disable session reaping and rejects negative timeouts', () => {
+    const disabled = parseConfig({ ...minimal, server: { sessionIdleTimeoutMs: 0 } });
+    expect(disabled.server.sessionIdleTimeoutMs).toBe(0);
+    expect(() => parseConfig({ ...minimal, server: { sessionIdleTimeoutMs: -1 } })).toThrow(
+      ConfigError
+    );
   });
 
   it('rejects an empty upstream list', () => {

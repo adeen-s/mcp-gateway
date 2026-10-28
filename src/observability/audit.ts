@@ -14,7 +14,8 @@ export interface AuditEvent {
     | 'rbac_denied'
     | 'rate_limited'
     | 'session_open'
-    | 'session_close';
+    | 'session_close'
+    | 'session_expired';
   tenant?: string;
   authMethod?: TenantIdentity['method'];
   subject?: string;
