@@ -62,6 +62,10 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   server: Server;
   tenant: TenantIdentity;
+  /** Epoch ms of the last request start or finish on this session. */
+  lastActiveAt: number;
+  /** Requests still open on this session, including a standalone GET stream. */
+  openRequests: number;
 }
 
 export interface GatewayOptions {
@@ -90,6 +94,7 @@ export class Gateway {
   private httpServer?: http.Server | https.Server;
   private adminServer?: http.Server;
   private readonly sessions = new Map<string, Session>();
+  private sessionReaper?: NodeJS.Timeout;
   private stopped = false;
 
   constructor(private readonly options: GatewayOptions) {
@@ -156,6 +161,7 @@ export class Gateway {
     });
 
     this.healthMonitor.watch(this.router.allUpstreams());
+    this.scheduleSessionReaper();
 
     this.httpServer = this.createMcpServer();
     await this.listen(this.httpServer, this.config.server.port, this.config.server.host);
@@ -208,6 +214,7 @@ export class Gateway {
     if (this.stopped) return;
     this.stopped = true;
     this.healthMonitor.stop();
+    clearInterval(this.sessionReaper);
     for (const [id, session] of this.sessions) {
       try {
         await session.transport.close();
@@ -268,8 +275,54 @@ export class Gateway {
     this.router.replace(keep, next.namespace);
     this.healthMonitor.watch(keep);
     this.config = next;
+    this.scheduleSessionReaper();
     this.logger.info({ warnings }, 'configuration reloaded');
     return { reloaded: true, warnings };
+  }
+
+  /** (Re)arm the idle-session sweep from the current config. */
+  private scheduleSessionReaper(): void {
+    clearInterval(this.sessionReaper);
+    this.sessionReaper = undefined;
+    const idleMs = this.config.server.sessionIdleTimeoutMs;
+    if (idleMs === 0) return;
+    // Half the timeout, capped at a minute: a session outlives its timeout by
+    // at most one sweep.
+    const everyMs = Math.min(60_000, Math.max(100, Math.floor(idleMs / 2)));
+    this.sessionReaper = setInterval(() => {
+      this.reapIdleSessions().catch((err: unknown) => {
+        this.logger.error({ err: (err as Error).message }, 'session reaper failed');
+      });
+    }, everyMs);
+    this.sessionReaper.unref();
+  }
+
+  /**
+   * Close sessions whose clients went away without a DELETE. A session with
+   * an open request (such as the client's GET notification stream) is never
+   * idle. Returns how many sessions were closed.
+   */
+  async reapIdleSessions(now = Date.now()): Promise<number> {
+    const idleMs = this.config.server.sessionIdleTimeoutMs;
+    if (idleMs === 0) return 0;
+    const expired = [...this.sessions].filter(
+      ([, s]) => s.openRequests === 0 && now - s.lastActiveAt >= idleMs
+    );
+    for (const [id, session] of expired) {
+      this.sessions.delete(id);
+      this.audit.record({
+        event: 'session_expired',
+        tenant: session.tenant.tenantId,
+        sessionId: id,
+      });
+      try {
+        await session.transport.close();
+      } catch {
+        // best effort
+      }
+    }
+    if (expired.length > 0) this.metrics.activeSessions.set(this.sessions.size);
+    return expired.length;
   }
 
   // -------------------------------------------------------------------------
@@ -367,6 +420,12 @@ export class Gateway {
         });
         return;
       }
+      session.openRequests += 1;
+      session.lastActiveAt = Date.now();
+      res.once('close', () => {
+        session.openRequests -= 1;
+        session.lastActiveAt = Date.now();
+      });
       await session.transport.handleRequest(req, res);
       return;
     }
@@ -383,7 +442,13 @@ export class Gateway {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sessionId) => {
-        this.sessions.set(sessionId, { transport, server, tenant });
+        this.sessions.set(sessionId, {
+          transport,
+          server,
+          tenant,
+          lastActiveAt: Date.now(),
+          openRequests: 0,
+        });
         this.metrics.activeSessions.set(this.sessions.size);
         this.audit.record({
           event: 'session_open',
